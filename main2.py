@@ -35,27 +35,72 @@ except ImportError as e:
         sys.exit(1)
 
 # ==========================================
-# SHADERS DO CENÁRIO 2D (CORREDOR)
+# SHADERS DO CENÁRIO 2D (CORREDOR COM ESTAMPA PROCEDURAL)
 # ==========================================
 CORRIDOR_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec3 aColor;
+
 out vec3 FragColor;
+out vec2 FragPos;
 
 void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
     FragColor = aColor;
+    FragPos = aPos; // Passa a posição para calcular a estampa nas paredes
 }
 """
 
 CORRIDOR_FRAGMENT_SRC = """
 #version 330 core
 in vec3 FragColor;
+in vec2 FragPos;
 out vec4 color;
 
+// Função para desenhar 1 florzinha vintage de 4 pétalas
+vec4 drawFlower(vec2 uv) {
+    vec3 bg_color   = vec3(0.18, 0.31, 0.31); // Creme / Beige
+    vec3 red_color  = vec3(1.0, 0.92, 0.8); // Vermelho vintage
+    vec3 dark_center= vec3(1.0, 0.92, 0.8); // Miolo escuro
+
+    float dist_center = length(uv);
+    if (dist_center < 0.08) {
+        return vec4(dark_center, 1.0);
+    }
+
+    // Distância das 4 pétalas em cruz
+    float p1 = length(uv - vec2( 0.14,  0.00));
+    float p2 = length(uv - vec2(-0.14,  0.00));
+    float p3 = length(uv - vec2( 0.00,  0.14));
+    float p4 = length(uv - vec2( 0.00, -0.14));
+
+    if (p1 < 0.11 || p2 < 0.11 || p3 < 0.11 || p4 < 0.11) {
+        return vec4(red_color, 1.0);
+    }
+
+    return vec4(bg_color, 1.0);
+}
+
 void main() {
-    color = vec4(FragColor, 1.0);
+    // Aplica a estampa apenas na região das paredes (detectada pela cor base original)
+    if (abs(FragColor.r - 0.60) < 0.01 && abs(FragColor.g - 0.08) < 0.01) {
+        // Escala e repetição da estampa
+        vec2 st = FragPos * 15.0; 
+        
+        // Padrão alternado (Staggered Grid)
+        vec2 grid = floor(st);
+        if (mod(grid.y, 2.0) == 1.0) {
+            st.x += 0.5;
+        }
+
+        vec2 ipos = floor(st);
+        vec2 fpos = fract(st) - 0.5;
+
+        color = drawFlower(fpos);
+    } else {
+        color = vec4(FragColor, 1.0);
+    }
 }
 """
 
@@ -121,21 +166,16 @@ void main() {
 # ==========================================
 # VARIÁVEIS DE ESTADO E CONTROLE
 # ==========================================
-# Cruz 3D
 t_x, t_y, t_z = -0.86, 0.1, 0.0
 ang_x, ang_y, ang_z = -0.15, -0.5854, 0.15
 s_factor = 0.22
 
-# Monstro 2D - Posicionado exatamente no fundo da porta
 char_pos = [0.0, -0.05]
 char_rotation = 0.0
 char_scale = [0.12, 0.12]
 
 wireframe_mode = False
 
-# --- Esqueleto 2D (personagem extra) ---
-# Posição inicial calibrada para reproduzir exatamente a pose de referência
-# (esqueleto em tamanho original, "caído"/deitado no canto inferior direito do corredor).
 skel_state = {
     'tx': 0.78,
     'ty': -0.72,
@@ -160,10 +200,8 @@ SKEL_LEFT_BOUND = -0.98
 
 
 def trigger_skel_head_fall():
-    """Lança a cabeça do esqueleto para a esquerda, em coordenadas de mundo."""
     if not skel_head_state['falling']:
         skel_head_state['falling'] = True
-        # Posição de mundo da cabeça = transform do corpo aplicado ao pivô local (0, 0.65)
         rad = math.radians(skel_state['rotation'])
         local_x, local_y = 0.0, 0.65
         scaled_x = local_x * skel_state['scale']
@@ -197,7 +235,6 @@ def reset_skeleton():
 
 
 def update_skeleton_physics():
-    """Física de queda da cabeça do esqueleto (mesma lógica do script original)."""
     if not skel_head_state['falling']:
         return
 
@@ -248,6 +285,8 @@ def key_event(window, key, scancode, action, mods):
             trigger_skel_head_fall()
         if key == glfw.KEY_0:
             reset_skeleton()
+        if key == glfw.KEY_ESCAPE:
+            glfw.set_window_should_close(window, True)
 
     if action in (glfw.PRESS, glfw.REPEAT):
         # --- Controles da Cruz 3D ---
@@ -311,6 +350,51 @@ def compose_transform_2d(tx=0.0, ty=0.0, angle_deg=0.0, sx=1.0, sy=1.0):
     return mat
 
 
+def compose_transform_3d(tx, ty, tz, rx, ry, rz, sx, sy, sz):
+    # Matriz de Escala
+    S = np.array([
+        [sx, 0, 0, 0],
+        [0, sy, 0, 0],
+        [0, 0, sz, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+    # Matrizes de Rotação (X, Y, Z)
+    cx, sx_s = math.cos(rx), math.sin(rx)
+    Rx = np.array([
+        [1, 0, 0, 0],
+        [0, cx, -sx_s, 0],
+        [0, sx_s, cx, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+    cy, sy_s = math.cos(ry), math.sin(ry)
+    Ry = np.array([
+        [cy, 0, sy_s, 0],
+        [0, 1, 0, 0],
+        [-sy_s, 0, cy, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+    cz, sz_s = math.cos(rz), math.sin(rz)
+    Rz = np.array([
+        [cz, -sz_s, 0, 0],
+        [sz_s, cz, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+    # Matriz de Traslação
+    T = np.array([
+        [1, 0, 0, tx],
+        [0, 1, 0, ty],
+        [0, 0, 1, tz],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+    return T @ Rz @ Ry @ Rx @ S
+
+
 class Mesh:
     def __init__(self, vao, count, draw_mode=GL_TRIANGLES):
         self.vao = vao
@@ -333,11 +417,11 @@ def _upload_2d_mesh(vertices, draw_mode):
 # GERAÇÃO DE GEOMETRIAS
 # ==========================================
 def create_corridor_mesh():
-    COLOR_CARPET  = [0.60, 0.08, 0.08]
-    COLOR_WALL    = [0.90, 0.90, 0.90]
-    COLOR_CEILING = [0.80, 0.80, 0.80]
+    COLOR_CARPET  = [0.55, 0.0, 0.0]
+    COLOR_WALL    = [0.60, 0.08, 0.08] # Cor identificada pelo Shader para desenhar as flores
+    COLOR_CEILING = [0.5, 0.0, 0.13]
     COLOR_DOOR    = [0.70, 0.70, 0.70]
-    COLOR_BORDER  = [0.10, 0.10, 0.10]
+    COLOR_BORDER  = [1.00, 0.99, 0.82]
 
     vertices = [
         -1.0, -1.0, *COLOR_CARPET,   1.0, -1.0, *COLOR_CARPET,   0.18, -0.10, *COLOR_CARPET,
@@ -354,6 +438,10 @@ def create_corridor_mesh():
         -1.0, -1.00, *COLOR_BORDER, -0.18, -0.11, *COLOR_BORDER,-1.0, -1.02, *COLOR_BORDER,
          1.0, -1.00, *COLOR_BORDER,  0.18, -0.10, *COLOR_BORDER, 0.18, -0.11, *COLOR_BORDER,
          1.0, -1.00, *COLOR_BORDER,  0.18, -0.11, *COLOR_BORDER, 1.0, -1.02, *COLOR_BORDER,
+         -1.0,  1.00, *COLOR_BORDER, -0.18,  0.10, *COLOR_BORDER, -0.18,  0.11, *COLOR_BORDER,
+        -1.0,  1.00, *COLOR_BORDER, -0.18,  0.11, *COLOR_BORDER, -1.0,  1.02, *COLOR_BORDER,
+         1.0,  1.00, *COLOR_BORDER,  0.18,  0.10, *COLOR_BORDER,  0.18,  0.11, *COLOR_BORDER,
+         1.0,  1.00, *COLOR_BORDER,  0.18,  0.11, *COLOR_BORDER,  1.0,  1.02, *COLOR_BORDER,
     ]
     return np.array(vertices, dtype=np.float32)
 
@@ -426,8 +514,6 @@ def create_circle(segments=48):
 
 
 def create_arc_mesh(segments=10):
-    """Arco genérico (meia-elipse) usado para as costelas do esqueleto.
-    Local space: x = -0.5*cos(t*pi), y = sin(t*pi), t em [0, 1]."""
     vertices = []
     for i in range(segments + 1):
         t = i / segments
@@ -439,7 +525,6 @@ def create_arc_mesh(segments=10):
 
 
 def create_spine_mesh(segments=10):
-    """Curva de Bézier fixa da coluna, já em coordenadas locais do esqueleto."""
     spine_top_x, spine_top_y = 0.02, 0.58
     control_x, control_y = 0.10, 0.30
     pelvis_x, pelvis_y = 0.0, 0.0
@@ -455,12 +540,12 @@ def create_spine_mesh(segments=10):
 
 
 # ==========================================
-# RENDERIZAÇÃO DE OBJETOS HIERÁRQUICOS (MONSTRO / ESQUELETO)
+# RENDERIZAÇÃO DE OBJETOS HIERÁRQUICOS
 # ==========================================
 def draw_shape(mesh, model_matrix, color, model_loc, color_loc, noise_loc, apply_noise=True):
     glUniformMatrix4fv(model_loc, 1, GL_TRUE, model_matrix.flatten())
     glUniform4fv(color_loc, 1, color)
-    glUniform1i(noise_loc, 1 if apply_noise else 0)
+    glUniform1i(noise_loc, 1 if (apply_noise and not wireframe_mode) else 0)
     glBindVertexArray(mesh.vao)
     glDrawArrays(mesh.draw_mode, 0, mesh.count)
 
@@ -489,78 +574,81 @@ def draw_ground_fingers(parent_matrix, wrist_pos, dir_x, triangle_mesh, model_lo
 
 
 def draw_character(parent_matrix, quad_mesh, triangle_mesh, eye_mesh, circle_mesh, pupil_mesh, model_loc, color_loc, noise_loc):
-    black_body = np.array([0.04, 0.04, 0.04, 1.0], dtype=np.float32)
-    eye_white  = np.array([0.95, 0.95, 0.95, 1.0], dtype=np.float32)
+    if wireframe_mode:
+        body_color = np.array([0.0, 1.0, 0.8, 1.0], dtype=np.float32)
+        eye_color  = np.array([1.0, 1.0, 0.0, 1.0], dtype=np.float32)
+        pupil_color= np.array([1.0, 0.2, 0.6, 1.0], dtype=np.float32)
+    else:
+        body_color = np.array([0.04, 0.04, 0.04, 1.0], dtype=np.float32)
+        eye_color  = np.array([0.95, 0.95, 0.95, 1.0], dtype=np.float32)
+        pupil_color= np.array([0.04, 0.04, 0.04, 1.0], dtype=np.float32)
 
-    # 1. Tronco e Bacia
-    draw_limb(parent_matrix, [-0.16, 0.42], [0.14, 0.46], 0.065, quad_mesh, model_loc, color_loc, noise_loc, black_body)
+    # Tronco
+    draw_limb(parent_matrix, [-0.16, 0.42], [0.14, 0.46], 0.065, quad_mesh, model_loc, color_loc, noise_loc, body_color)
     chest_m = compose_transform_2d(tx=-0.01, ty=0.30, angle_deg=-5.0, sx=0.16, sy=0.24)
-    draw_shape(quad_mesh, parent_matrix @ chest_m, black_body, model_loc, color_loc, noise_loc, apply_noise=True)
+    draw_shape(quad_mesh, parent_matrix @ chest_m, body_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
-    draw_limb(parent_matrix, [-0.01, 0.20], [0.05, -0.16], 0.11, quad_mesh, model_loc, color_loc, noise_loc, black_body)
+    draw_limb(parent_matrix, [-0.01, 0.20], [0.05, -0.16], 0.11, quad_mesh, model_loc, color_loc, noise_loc, body_color)
     pelvis_m = compose_transform_2d(tx=0.05, ty=-0.16, angle_deg=10.0, sx=0.15, sy=0.13)
-    draw_shape(quad_mesh, parent_matrix @ pelvis_m, black_body, model_loc, color_loc, noise_loc, apply_noise=True)
+    draw_shape(quad_mesh, parent_matrix @ pelvis_m, body_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
-    # 2. Pescoço
-    draw_limb(parent_matrix, [-0.01, 0.44], [-0.03, 0.72], 0.045, quad_mesh, model_loc, color_loc, noise_loc, black_body)
+    # Pescoço
+    draw_limb(parent_matrix, [-0.01, 0.44], [-0.03, 0.72], 0.045, quad_mesh, model_loc, color_loc, noise_loc, body_color)
 
-    # 3. Braços Longos
+    # Braços
     l_shoulder, l_elbow, l_wrist = [-0.16, 0.42], [-0.25, -0.05], [-0.28, -0.72]
-    draw_limb(parent_matrix, l_shoulder, l_elbow, 0.046, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, l_elbow, 0.055, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, l_elbow, l_wrist, 0.038, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, l_wrist, 0.046, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_ground_fingers(parent_matrix, l_wrist, -1.0, triangle_mesh, model_loc, color_loc, noise_loc, black_body)
+    draw_limb(parent_matrix, l_shoulder, l_elbow, 0.046, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, l_elbow, 0.024, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, l_elbow, l_wrist, 0.038, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, l_wrist, 0.020, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_ground_fingers(parent_matrix, l_wrist, -1.0, triangle_mesh, model_loc, color_loc, noise_loc, body_color)
 
     r_shoulder, r_elbow, r_wrist = [0.14, 0.46], [0.24, -0.02], [0.26, -0.74]
-    draw_limb(parent_matrix, r_shoulder, r_elbow, 0.046, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, r_elbow, 0.055, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, r_elbow, r_wrist, 0.038, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, r_wrist, 0.046, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_ground_fingers(parent_matrix, r_wrist, 1.0, triangle_mesh, model_loc, color_loc, noise_loc, black_body)
+    draw_limb(parent_matrix, r_shoulder, r_elbow, 0.046, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, r_elbow, 0.024, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, r_elbow, r_wrist, 0.038, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, r_wrist, 0.020, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_ground_fingers(parent_matrix, r_wrist, 1.0, triangle_mesh, model_loc, color_loc, noise_loc, body_color)
 
-    # 4. Pernas
+    # Pernas
     l_hip, l_knee, l_ankle = [0.01, -0.20], [-0.04, -0.55], [-0.02, -0.88]
-    draw_limb(parent_matrix, l_hip, l_knee, 0.048, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, l_knee, 0.054, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, l_knee, l_ankle, 0.038, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, l_ankle, 0.042, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, l_ankle, [-0.08, -0.92], 0.045, quad_mesh, model_loc, color_loc, noise_loc, black_body)
+    draw_limb(parent_matrix, l_hip, l_knee, 0.048, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, l_knee, 0.025, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, l_knee, l_ankle, 0.038, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, l_ankle, 0.021, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, l_ankle, [-0.08, -0.92], 0.045, quad_mesh, model_loc, color_loc, noise_loc, body_color)
 
     r_hip, r_knee, r_ankle = [0.09, -0.19], [0.10, -0.53], [0.08, -0.88]
-    draw_limb(parent_matrix, r_hip, r_knee, 0.048, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, r_knee, 0.054, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, r_knee, r_ankle, 0.038, quad_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_joint(parent_matrix, r_ankle, 0.042, circle_mesh, model_loc, color_loc, noise_loc, black_body)
-    draw_limb(parent_matrix, r_ankle, [0.02, -0.92], 0.045, quad_mesh, model_loc, color_loc, noise_loc, black_body)
+    draw_limb(parent_matrix, r_hip, r_knee, 0.048, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, r_knee, 0.025, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, r_knee, r_ankle, 0.038, quad_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_joint(parent_matrix, r_ankle, 0.021, circle_mesh, model_loc, color_loc, noise_loc, body_color)
+    draw_limb(parent_matrix, r_ankle, [0.02, -0.92], 0.045, quad_mesh, model_loc, color_loc, noise_loc, body_color)
 
-    # 5. Cabeça e Espinhos
+    # Cabeça
     head_center = [-0.03, 0.82]
     spike_angles = [0.0, 38.0, -38.0, 180.0, 142.0, 218.0, 90.0, 270.0]
     for angle in spike_angles:
         rad = math.radians(angle)
         pos = [head_center[0] - math.sin(rad) * 0.05, head_center[1] + math.cos(rad) * 0.05]
         spike_m = compose_transform_2d(tx=pos[0], ty=pos[1], angle_deg=angle, sx=0.14, sy=0.30)
-        draw_shape(triangle_mesh, parent_matrix @ spike_m, black_body, model_loc, color_loc, noise_loc, apply_noise=True)
+        draw_shape(triangle_mesh, parent_matrix @ spike_m, body_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
     head_base_m = compose_transform_2d(tx=head_center[0], ty=head_center[1], angle_deg=0.0, sx=0.28, sy=0.17)
-    draw_shape(circle_mesh, parent_matrix @ head_base_m, black_body, model_loc, color_loc, noise_loc, apply_noise=True)
+    draw_shape(circle_mesh, parent_matrix @ head_base_m, body_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
     eye_m = compose_transform_2d(tx=head_center[0], ty=head_center[1], angle_deg=0.0, sx=0.25, sy=0.12)
-    draw_shape(eye_mesh, parent_matrix @ eye_m, eye_white, model_loc, color_loc, noise_loc, apply_noise=False)
+    draw_shape(eye_mesh, parent_matrix @ eye_m, eye_color, model_loc, color_loc, noise_loc, apply_noise=False)
 
     pupil_m = compose_transform_2d(tx=head_center[0], ty=head_center[1], angle_deg=0.0, sx=0.14, sy=0.12)
-    draw_shape(pupil_mesh, parent_matrix @ pupil_m, black_body, model_loc, color_loc, noise_loc, apply_noise=True)
+    draw_shape(pupil_mesh, parent_matrix @ pupil_m, pupil_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
 
 def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_mesh, model_loc, color_loc, noise_loc):
-    """Desenha o corpo do esqueleto (sem a cabeça), reaproveitando os helpers de membro."""
-    bone_color = np.array([0.88, 0.85, 0.78, 1.0], dtype=np.float32)
+    bone_color = np.array([0.2, 1.0, 0.2, 1.0], dtype=np.float32) if wireframe_mode else np.array([0.88, 0.85, 0.78, 1.0], dtype=np.float32)
 
-    # Coluna (curva fixa, já em espaço local)
     draw_shape(spine_mesh, parent_matrix, bone_color, model_loc, color_loc, noise_loc, apply_noise=False)
 
-    # Costelas (7 arcos, larguras decrescentes nas pontas)
     rib_center_x, rib_center_y = 0.02, 0.35
     rib_width, rib_height, rib_count = 0.18, 0.25, 7
     for i in range(rib_count):
@@ -569,12 +657,10 @@ def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_me
         rib_m = compose_transform_2d(tx=rib_center_x, ty=offset_y, angle_deg=0.0, sx=curve_w, sy=0.02)
         draw_shape(arc_mesh, parent_matrix @ rib_m, bone_color, model_loc, color_loc, noise_loc, apply_noise=False)
 
-    # Pélvis
     pelvis = [0.0, 0.0]
     draw_joint(parent_matrix, pelvis, 0.06, circle_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
     draw_limb(parent_matrix, [-0.05, -0.01], [0.03, -0.01], 0.012, quad_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
 
-    # Braço
     shoulder, elbow, wrist = [0.01, 0.50], [0.0, 0.28], [-0.05, 0.10]
     draw_joint(parent_matrix, shoulder, 0.02, circle_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
     draw_joint(parent_matrix, elbow, 0.018, circle_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
@@ -583,7 +669,6 @@ def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_me
     hand_end = [wrist[0] - 0.03, wrist[1] - 0.05]
     draw_limb(parent_matrix, wrist, hand_end, 0.008, quad_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
 
-    # Perna
     knee, ankle = [-0.30, 0.05], [-0.65, 0.0]
     draw_joint(parent_matrix, knee, 0.025, circle_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
     draw_joint(parent_matrix, ankle, 0.02, circle_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
@@ -594,9 +679,12 @@ def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_me
 
 
 def draw_skeleton_head(parent_matrix, circle_mesh, model_loc, color_loc, noise_loc):
-    """Desenha a cabeça centralizada no ponto de pivô local (0, 0)."""
-    bone_color = np.array([0.88, 0.85, 0.78, 1.0], dtype=np.float32)
-    socket_color = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+    if wireframe_mode:
+        bone_color   = np.array([0.2, 1.0, 0.2, 1.0], dtype=np.float32)
+        socket_color = np.array([1.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    else:
+        bone_color   = np.array([0.88, 0.85, 0.78, 1.0], dtype=np.float32)
+        socket_color = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
 
     skull_m = compose_transform_2d(tx=0.0, ty=0.0, angle_deg=0.0, sx=0.16, sy=0.16)
     draw_shape(circle_mesh, parent_matrix @ skull_m, bone_color, model_loc, color_loc, noise_loc, apply_noise=False)
@@ -629,24 +717,18 @@ def draw_skeleton(quad_mesh, circle_mesh, arc_mesh, spine_mesh, model_loc, color
     draw_skeleton_head(head_matrix, circle_mesh, model_loc, color_loc, noise_loc)
 
 
-# Proporção original da cena (retrato). Preservada ao ampliar a janela,
-# para o corredor/cruz/personagens não ficarem esticados/distorcidos.
 SCENE_ASPECT = 500.0 / 900.0
 
 
 def apply_letterboxed_viewport(width, height):
-    """Calcula e aplica um viewport centralizado que preserva SCENE_ASPECT,
-    adicionando barras pretas nas laterais ou em cima/embaixo quando necessário."""
     if width <= 0 or height <= 0:
         return
 
     window_aspect = width / height
     if window_aspect > SCENE_ASPECT:
-        # Janela mais larga que a cena: barras nas laterais
         vp_height = height
         vp_width = int(height * SCENE_ASPECT)
     else:
-        # Janela mais alta/estreita que a cena: barras em cima/embaixo
         vp_width = width
         vp_height = int(width / SCENE_ASPECT)
 
@@ -656,7 +738,6 @@ def apply_letterboxed_viewport(width, height):
 
 
 def framebuffer_size_callback(window, width, height):
-    """Mantém a proporção correta sempre que a janela for redimensionada/maximizada."""
     apply_letterboxed_viewport(width, height)
 
 
@@ -670,9 +751,16 @@ def main():
     glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
     glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-    glfw.window_hint(glfw.MAXIMIZED, glfw.TRUE)
 
-    window = glfw.create_window(500, 900, "Corredor + Cruz 3D + Monstro + Esqueleto", None, None)
+    primary_monitor = glfw.get_primary_monitor()
+    video_mode = glfw.get_video_mode(primary_monitor)
+    screen_width, screen_height = video_mode.size.width, video_mode.size.height
+
+    window = glfw.create_window(
+        screen_width, screen_height,
+        "Corredor + Cruz 3D + Monstro + Esqueleto",
+        primary_monitor, None
+    )
     if not window:
         glfw.terminate()
         sys.exit()
@@ -682,10 +770,11 @@ def main():
     glfw.set_key_callback(window, key_event)
     glfw.set_framebuffer_size_callback(window, framebuffer_size_callback)
 
-    # Garante que o viewport já comece ajustado (com a proporção correta) ao
-    # tamanho maximizado da janela
     fb_width, fb_height = glfw.get_framebuffer_size(window)
     apply_letterboxed_viewport(fb_width, fb_height)
+
+    # Ativa Depth Test apenas para elementos 3D se necessário
+    glEnable(GL_DEPTH_TEST)
 
     corridor_shader = compileProgram(
         compileShader(CORRIDOR_VERTEX_SRC, GL_VERTEX_SHADER),
@@ -721,7 +810,7 @@ def main():
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * cross_verts.itemsize, ctypes.c_void_p(0))
     glEnableVertexAttribArray(0)
 
-    # Malhas compartilhadas entre monstro e esqueleto
+    # Malhas compartilhadas
     quad_mesh     = create_quad()
     triangle_mesh = create_triangle()
     eye_mesh      = create_eye_shape(40)
@@ -749,11 +838,12 @@ def main():
     ]
 
     print("\n--- CONTROLES ---")
-    print("Cruz 3D:      SETAS move | Q/W/A/S/E/R gira | Z/X escala")
-    print("Monstro:      I/K/J/L move | U/O gira | N/M escala")
-    print("Esqueleto:    T/G/F/H move | Y/V gira | ,/. escala")
-    print("Esqueleto:    C derruba a cabeça | 0 reseta o esqueleto")
-    print("Wireframe (tudo: corredor, cruz, monstro, esqueleto): P")
+    print("Cruz 3D:       SETAS move | Q/W/A/S/E/R gira | Z/X escala")
+    print("Monstro:       I/K/J/L move | U/O gira | N/M escala")
+    print("Esqueleto:     T/G/F/H move | Y/V gira | ,/. escala")
+    print("Esqueleto:     C derruba a cabeça | 0 reseta o esqueleto")
+    print("Wireframe:     P")
+    print("Sair:          ESC")
     print("-----------------\n")
 
     while not glfw.window_should_close(window):
@@ -763,102 +853,46 @@ def main():
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        # Wireframe (tecla P) agora vale para TUDO: corredor, cruz, monstro e esqueleto,
-        # definido uma única vez por frame em vez de em cada seção separadamente.
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if wireframe_mode else GL_FILL)
 
-        # -------------------------------------------------------------
-        # 1. RENDERIZA CORREDOR 2D
-        # -------------------------------------------------------------
+        # 1. RENDERIZAR CORREDOR (COM ESTAMPA NAS PAREDES)
         glDisable(GL_DEPTH_TEST)
         glUseProgram(corridor_shader)
         glBindVertexArray(corridor_VAO)
         glDrawArrays(GL_TRIANGLES, 0, len(corridor_verts) // 5)
 
-        # -------------------------------------------------------------
-        # 2. RENDERIZA CRUZ 3D
-        # -------------------------------------------------------------
-        glEnable(GL_DEPTH_TEST)
-        glUseProgram(cross_shader)
-
-        mat_escala = np.array([
-            [s_factor, 0.0, 0.0, 0.0],
-            [0.0, s_factor, 0.0, 0.0],
-            [0.0, 0.0, s_factor, 0.0],
-            [0.0, 0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-
-        cos_x, sin_x = math.cos(ang_x), math.sin(ang_x)
-        mat_rx = np.array([
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, cos_x, -sin_x, 0.0],
-            [0.0, sin_x, cos_x, 0.0],
-            [0.0, 0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-
-        cos_y, sin_y = math.cos(ang_y), math.sin(ang_y)
-        mat_ry = np.array([
-            [cos_y, 0.0, sin_y, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [-sin_y, 0.0, cos_y, 0.0],
-            [0.0, 0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-
-        cos_z, sin_z = math.cos(ang_z), math.sin(ang_z)
-        mat_rz = np.array([
-            [cos_z, -sin_z, 0.0, 0.0],
-            [sin_z, cos_z, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-
-        mat_translacao = np.array([
-            [1.0, 0.0, 0.0, t_x],
-            [0.0, 1.0, 0.0, t_y],
-            [0.0, 0.0, 1.0, t_z],
-            [0.0, 0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-
-        mat_composta_cross = mat_translacao @ (mat_rz @ mat_ry @ mat_rx) @ mat_escala
-        glUniformMatrix4fv(loc_cross_trans, 1, GL_TRUE, mat_composta_cross.flatten())
-
-        glBindVertexArray(cross_VAO)
-        for i in range(16):
-            r, g, b, a = cores_faces[i]
-            glUniform4f(loc_cross_color, r, g, b, a)
-            glDrawArrays(GL_TRIANGLE_STRIP, i * 4, 4)
-
-        # -------------------------------------------------------------
-        # 3. RENDERIZA MONSTRO 2D E ESQUELETO 2D (HIERÁRQUICOS)
-        # -------------------------------------------------------------
-        glDisable(GL_DEPTH_TEST)
+        # 2. RENDERIZAR MONSTRO 2D
         glUseProgram(char_shader)
-
-        global_monster_matrix = compose_transform_2d(
+        monster_matrix = compose_transform_2d(
             tx=char_pos[0], ty=char_pos[1],
             angle_deg=char_rotation,
             sx=char_scale[0], sy=char_scale[1]
         )
         draw_character(
-            global_monster_matrix,
-            quad_mesh, triangle_mesh, eye_mesh, circle_mesh, pupil_mesh,
-            c_model_loc, c_color_loc, c_noise_loc
+            monster_matrix, quad_mesh, triangle_mesh, eye_mesh,
+            circle_mesh, pupil_mesh, c_model_loc, c_color_loc, c_noise_loc
         )
 
+        # 3. RENDERIZAR ESQUELETO 2D
         draw_skeleton(
             quad_mesh, circle_mesh, arc_mesh, spine_mesh,
             c_model_loc, c_color_loc, c_noise_loc
         )
 
+        # 4. RENDERIZAR CRUZ 3D
+        glEnable(GL_DEPTH_TEST)
+        glUseProgram(cross_shader)
+        mat_cross = compose_transform_3d(t_x, t_y, t_z, ang_x, ang_y, ang_z, s_factor, s_factor, s_factor)
+        glUniformMatrix4fv(loc_cross_trans, 1, GL_TRUE, mat_cross.flatten())
+
+        glBindVertexArray(cross_VAO)
+        for i in range(16):
+            glUniform4fv(loc_cross_color, 1, cores_faces[i])
+            glDrawArrays(GL_TRIANGLE_STRIP, i * 4, 4)
+
         glfw.swap_buffers(window)
 
-    glDeleteVertexArrays(1, [corridor_VAO, cross_VAO])
-    glDeleteBuffers(1, [corridor_VBO, cross_VBO])
-    glDeleteProgram(corridor_shader)
-    glDeleteProgram(cross_shader)
-    glDeleteProgram(char_shader)
     glfw.terminate()
-
 
 if __name__ == "__main__":
     main()
