@@ -88,6 +88,33 @@ void main() {
 """
 
 # ==========================================
+# SHADERS DA LUMINÁRIA 3D
+# ==========================================
+LAMP_VERTEX_SRC = """
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+
+uniform mat4 uTransform;
+out vec3 fragColor;
+
+void main() {
+    gl_Position = uTransform * vec4(aPos, 1.0);
+    fragColor = aColor;
+}
+"""
+
+LAMP_FRAGMENT_SRC = """
+#version 330 core
+in vec3 fragColor;
+out vec4 FragColor;
+
+void main() {
+    FragColor = vec4(fragColor, 1.0);
+}
+"""
+
+# ==========================================
 # SHADERS DE OBJETOS 2D HIERÁRQUICOS (MONSTRO E ESQUELETO)
 # ==========================================
 CHAR_VERTEX_SRC = """
@@ -235,6 +262,58 @@ def update_skeleton_physics():
         skel_head_state['x'] = SKEL_LEFT_BOUND + head_radius
         skel_head_state['vx'] = 0.0
         skel_head_state['target_rotation'] = skel_head_state['rotation']
+
+
+def generate_lamp_geometry(segments=64):
+    vertices = []
+
+    color_light = [1.0, 0.98, 0.88]
+    color_rim = [1.0, 1.0, 1.0]
+    color_back = [1.0, 1.0, 0.4]
+
+    vertices.extend([0.0, 0.0, 0.2, *color_light])
+    for i in range(segments + 1):
+        angle = (2.0 * math.pi * i) / segments
+        x = math.cos(angle)
+        y = math.sin(angle)
+        vertices.extend([x, y, 0.2, *color_light])
+
+    rim_start = segments + 2
+    for i in range(segments + 1):
+        angle = (2.0 * math.pi * i) / segments
+        x = math.cos(angle)
+        y = math.sin(angle)
+        vertices.extend([x, y, 0.2, *color_rim])
+        vertices.extend([x, y, -0.3, *color_rim])
+
+    back_start = rim_start + (segments + 1) * 2
+    vertices.extend([0.0, 0.0, -0.3, *color_back])
+    for i in range(segments + 1):
+        angle = (2.0 * math.pi * i) / segments
+        x = math.cos(angle)
+        y = math.sin(angle)
+        vertices.extend([x, y, -0.3, *color_back])
+
+    return np.array(vertices, dtype=np.float32), segments, rim_start, back_start
+
+
+def create_lamp_mesh():
+    vertices, segments, rim_start, back_start = generate_lamp_geometry()
+    vao = glGenVertexArrays(1)
+    vbo = glGenBuffers(1)
+
+    glBindVertexArray(vao)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+
+    stride = 6 * vertices.itemsize
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(3 * vertices.itemsize))
+    glEnableVertexAttribArray(1)
+    glBindVertexArray(0)
+
+    return vao, vbo, segments, rim_start, back_start
 
 
 def key_event(window, key, scancode, action, mods):
@@ -676,14 +755,10 @@ def main():
     glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 
-    primary_monitor = glfw.get_primary_monitor()
-    video_mode = glfw.get_video_mode(primary_monitor)
-    screen_width, screen_height = video_mode.size.width, video_mode.size.height
-
     window = glfw.create_window(
-        screen_width, screen_height,
+        1100, 800,
         "Corredor + Cruz 3D + Monstro + Esqueleto",
-        primary_monitor, None
+        None, None
     )
     if not window:
         glfw.terminate()
@@ -707,6 +782,11 @@ def main():
     cross_shader = compileProgram(
         compileShader(CROSS_VERTEX_SRC, GL_VERTEX_SHADER),
         compileShader(CROSS_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
+    )
+
+    lamp_shader = compileProgram(
+        compileShader(LAMP_VERTEX_SRC, GL_VERTEX_SHADER),
+        compileShader(LAMP_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
     )
 
     char_shader = compileProgram(
@@ -743,7 +823,11 @@ def main():
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride_cross, ctypes.c_void_p(offset_cor))
     glEnableVertexAttribArray(1)
 
-    # 5. DEMAIS MALHAS COMPARTILHADAS E UNIFORMS
+    # 5. LUMINÁRIA 3D
+    lamp_vao, lamp_vbo, lamp_segments, lamp_rim_start, lamp_back_start = create_lamp_mesh()
+    lamp_transform_loc = glGetUniformLocation(lamp_shader, "uTransform")
+
+    # 6. DEMAIS MALHAS COMPARTILHADAS E UNIFORMS
     quad_mesh     = create_quad()
     triangle_mesh = create_triangle()
     eye_mesh      = create_eye_shape(40)
@@ -844,7 +928,39 @@ def main():
             glDrawArrays(GL_TRIANGLE_STRIP, face_idx * 4, 4)
 
         # -------------------------------------------------------------
-        # 3. RENDERIZA MONSTRO 2D E ESQUELETO 2D (HIERÁRQUICOS)
+        # 3. RENDERIZA LUMINÁRIA 3D
+        # -------------------------------------------------------------
+        glUseProgram(lamp_shader)
+        lamp_S = np.array([
+            [0.25, 0.0, 0.0, 0.0],
+            [0.0, 0.25, 0.0, 0.0],
+            [0.0, 0.0, 0.12, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ], dtype=np.float32)
+
+        lamp_R_x = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, math.cos(math.radians(-72)), -math.sin(math.radians(-72)), 0.0],
+            [0.0, math.sin(math.radians(-72)), math.cos(math.radians(-72)), 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ], dtype=np.float32)
+
+        lamp_T = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.78],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ], dtype=np.float32)
+
+        lamp_matrix = lamp_T @ lamp_R_x @ lamp_S
+        glUniformMatrix4fv(lamp_transform_loc, 1, GL_TRUE, lamp_matrix.flatten())
+        glBindVertexArray(lamp_vao)
+        glDrawArrays(GL_TRIANGLE_FAN, lamp_back_start, lamp_segments + 2)
+        glDrawArrays(GL_TRIANGLE_STRIP, lamp_rim_start, (lamp_segments + 1) * 2)
+        glDrawArrays(GL_TRIANGLE_FAN, 0, lamp_segments + 2)
+
+        # -------------------------------------------------------------
+        # 4. RENDERIZA MONSTRO 2D E ESQUELETO 2D (HIERÁRQUICOS)
         # -------------------------------------------------------------
         glDisable(GL_DEPTH_TEST)
         glUseProgram(char_shader)
@@ -869,10 +985,13 @@ def main():
 
     glDeleteVertexArrays(1, [corridor_VAO])
     glDeleteVertexArrays(1, [cross_VAO])
+    glDeleteVertexArrays(1, [lamp_vao])
     glDeleteBuffers(1, [corridor_VBO])
     glDeleteBuffers(1, [cross_VBO])
+    glDeleteBuffers(1, [lamp_vbo])
     glDeleteProgram(corridor_shader)
     glDeleteProgram(cross_shader)
+    glDeleteProgram(lamp_shader)
     glDeleteProgram(char_shader)
     glfw.terminate()
 
