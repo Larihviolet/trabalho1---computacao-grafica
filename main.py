@@ -1,3 +1,5 @@
+# OLHA EU SOU UM COMENTÁRIO MUITO IMPORTANTE QUE VAI ENSINAR GIT PRA VC
+
 import sys
 import math
 import ctypes
