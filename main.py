@@ -205,6 +205,13 @@ cabinet_state = {
     'scale': 0.48,
 }
 
+# --- Luminária 3D ---
+# Escala inicial equivalente a 15 cliques de diminuição na tecla 7
+# (1.0 - 15 * 0.02 = 0.70).
+lamp_state = {
+    'scale': 0.70,
+}
+
 # --- Esqueleto 2D ---
 skel_state = {
     'tx': 0.78,
@@ -265,10 +272,10 @@ def reset_skeleton():
 
 
 def reset_cabinet():
-    cabinet_state['tx'] = -0.10
-    cabinet_state['ty'] = 0.0
+    cabinet_state['tx'] = 0.0
+    cabinet_state['ty'] = -0.12
     cabinet_state['rotation'] = 0.0
-    cabinet_state['scale'] = 0.54
+    cabinet_state['scale'] = 0.78
 
 
 def update_skeleton_physics():
@@ -325,21 +332,23 @@ def generate_lamp_geometry(segments=64):
         y = math.sin(angle)
         vertices.extend([x, y, 0.2, *color_light])
 
+    rim_depth = -0.12  # Profundidade do aro branco (era -0.3; valor menos negativo = aro mais curto/fino)
+
     rim_start = segments + 2
     for i in range(segments + 1):
         angle = (2.0 * math.pi * i) / segments
         x = math.cos(angle)
         y = math.sin(angle)
         vertices.extend([x, y, 0.2, *color_rim])
-        vertices.extend([x, y, -0.3, *color_rim])
+        vertices.extend([x, y, rim_depth, *color_rim])
 
     back_start = rim_start + (segments + 1) * 2
-    vertices.extend([0.0, 0.0, -0.3, *color_back])
+    vertices.extend([0.0, 0.0, rim_depth, *color_back])
     for i in range(segments + 1):
         angle = (2.0 * math.pi * i) / segments
         x = math.cos(angle)
         y = math.sin(angle)
-        vertices.extend([x, y, -0.3, *color_back])
+        vertices.extend([x, y, rim_depth, *color_back])
 
     return np.array(vertices, dtype=np.float32), segments, rim_start, back_start
 
@@ -385,16 +394,15 @@ def add_circle(vertices, cx, cy, rx, ry, color, segments=16):
 
 def build_cabinet_geometry():
     vertices = []
-    c_outline = (0.10, 0.10, 0.10)
-    c_top = (0.94, 0.92, 0.88)
-    c_side = (0.78, 0.74, 0.67)
-    c_side_inset = (0.68, 0.64, 0.58)
-    c_front = (0.83, 0.80, 0.73)
-    c_drawer = (0.89, 0.86, 0.80)
-    c_knob = (0.96, 0.82, 0.15)
-    c_mirror_frame = (0.80, 0.75, 0.64)
+    c_outline = (0.06, 0.04, 0.02)
+    c_top = (0.42, 0.27, 0.15)
+    c_side = (0.30, 0.18, 0.10)
+    c_side_inset = (0.22, 0.13, 0.07)
+    c_front = (0.35, 0.21, 0.12)
+    c_drawer = (0.38, 0.24, 0.14)
+    c_knob = (0.85, 0.65, 0.20)
+    c_mirror_frame = (0.28, 0.17, 0.09)
     c_glass = (0.42, 0.54, 0.56)
-
     mirror_offset_y = 0.32
     add_quad(vertices, (-0.88, 0.62 + mirror_offset_y), (-0.42, 0.38 + mirror_offset_y), (-0.42, -0.05 + mirror_offset_y), (-0.88, 0.10 + mirror_offset_y), c_outline)
     add_quad(vertices, (-0.86, 0.59 + mirror_offset_y), (-0.44, 0.36 + mirror_offset_y), (-0.44, -0.03 + mirror_offset_y), (-0.86, 0.12 + mirror_offset_y), c_mirror_frame)
@@ -563,6 +571,10 @@ def key_event(window, key, scancode, action, mods):
 
         if key == glfw.KEY_APOSTROPHE: cabinet_state['rotation'] += 1.0
         if key == glfw.KEY_SEMICOLON:  cabinet_state['rotation'] -= 1.0
+
+        # --- Controles da Luminária 3D (escala) ---
+        if key == glfw.KEY_8: lamp_state['scale'] = min(3.0, lamp_state['scale'] + 0.02)
+        if key == glfw.KEY_7: lamp_state['scale'] = max(0.05, lamp_state['scale'] - 0.02)
 
 
 # ==========================================
@@ -1047,6 +1059,7 @@ def main():
     print("Esqueleto:     T/G/F/H move | Y/V gira | ,/. escala")
     print("Esqueleto:     C derruba a cabeça | 0 reseta o esqueleto")
     print("Cômoda:        D/B move X | =/- move Y | ]/[ escala | '/; gira | 9 reseta a cômoda")
+    print("Luminária:     7/8 diminui/aumenta escala")
     print("Wireframe (malhas visíveis e coloridas): P")
     print("Sair: ESC")
     print("-----------------\n")
@@ -1149,9 +1162,9 @@ def main():
         # -------------------------------------------------------------
         glUseProgram(lamp_shader)
         lamp_S = np.array([
-            [0.25, 0.0, 0.0, 0.0],
-            [0.0, 0.25, 0.0, 0.0],
-            [0.0, 0.0, 0.12, 0.0],
+            [0.25 * lamp_state['scale'], 0.0, 0.0, 0.0],
+            [0.0, 0.25 * lamp_state['scale'], 0.0, 0.0],
+            [0.0, 0.0, 0.12 * lamp_state['scale'], 0.0],
             [0.0, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
 
