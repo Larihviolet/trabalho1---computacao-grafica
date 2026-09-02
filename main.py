@@ -1,16 +1,37 @@
+# Trabalho 1 - SCC0250 Computação Gráfica 
+# Nome: Larissa Rocha Goncalves NUSP: 15522431
+# Cena de Terror. Sendo os objetos:
+
+   #1. Corredor 2D  - plano de fundo estático (chão, paredes, teto, porta).
+   #2. Cômoda 2D    - móvel desenhado com quads/triângulos coloridos, com translação/rotação/escala controláveis pelo usuário.
+   #3. Cruz 3D      - objeto 3D composto por 16 faces coloridas, controlado por translação e rotação nos 3 eixos.
+   #4. Luminária 3D - disco/cone gerado proceduralmente (frente, aro e fundo), controlado apenas por escala.
+   #5. Monstro 2D   - personagem articulado (hierárquico) feito de membros, juntas e triângulos, com "ruído" de cor aplicado via shader.
+   #6. Esqueleto 2D - outro personagem hierárquico, cuja cabeça pode ser "derrubada" e sofre uma simulação simples de física
+    #(gravidade, quique no chão e rotação/deslizamento).
+ 
+# Arquitetura geral:
+   #- Cada objeto tem seu próprio par de shaders (vertex/fragment) e função(ões) de geração de geometria (`create_*_mesh` / `build_*_geometry`).
+   #- Transformações 2D (translação, rotação, escala) são compostas em uma única matriz 4x4 pela função `compose_transform_2d`.
+   #- Objetos hierárquicos (monstro e esqueleto) são desenhados por composição de matrizes: cada "osso"/parte é desenhado multiplicando a matriz do pai pela transformação local da parte (ver `draw_limb`, `draw_joint`,
+    #`draw_character`, `draw_skeleton*`).
+   #- O estado de cada objeto controlável fica em dicionários/globais no topo
+      #do arquivo (`cabinet_state`, `lamp_state`, `skel_state`, etc.) e é alterado pelos callbacks de teclado (`key_event`).
+   #- O loop principal (`main`) compila os shaders, sobe as malhas para a
+      # GPU, e a cada frame: processa eventos, atualiza física, limpa a tela e desenha cada objeto na ordem correta (2D sem depth test, depois 3D com depth test, depois os personagens 2D por cima).
 import sys
 import math
 import ctypes
 import subprocess
 
-# ==============================================================================
-# MECANISMO DE INSTALAÇÃO AUTOMÁTICA
-# ==============================================================================
+# Instalando os pacotes necessários
 try:
     import numpy as np
     import glfw
     from OpenGL.GL import *
     from OpenGL.GL.shaders import compileProgram, compileShader
+    # Se qualquer uma das libs acima não estiver instalada, tenta instalar
+    # automaticamente via pip e reinicia o próprio script.
 except ImportError as e:
     print(f"Pacote faltando detectado: {e.name}. Instalando dependências...")
     try:
@@ -34,9 +55,8 @@ except ImportError as e:
         print("Por favor, instale manualmente: pip install glfw PyOpenGL PyOpenGL_accelerate numpy")
         sys.exit(1)
 
-# ==========================================
-# SHADERS DO CENÁRIO 2D (CORREDOR)
-# ==========================================
+# Shaders do Cenário 2D (Corredor)
+
 CORRIDOR_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -59,9 +79,7 @@ void main() {
 }
 """
 
-# ==========================================
-# SHADERS DA CRUZ 3D
-# ==========================================
+# Shaders da Cruz 3D
 CROSS_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -87,9 +105,7 @@ void main() {
 }
 """
 
-# ==========================================
-# SHADERS DA LUMINÁRIA 3D
-# ==========================================
+# Shaders da Luminária
 LAMP_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -114,9 +130,7 @@ void main() {
 }
 """
 
-# ==========================================
-# SHADERS DA CÔMODA 2D
-# ==========================================
+# Shaders da Cômoda 
 CABINET_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -140,9 +154,8 @@ void main() {
 }
 """
 
-# ==========================================
-# SHADERS DE OBJETOS 2D HIERÁRQUICOS (MONSTRO E ESQUELETO)
-# ==========================================
+
+# Shaders de objetos (Monstro e Esqueleto)
 CHAR_VERTEX_SRC = """
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -176,9 +189,13 @@ void main() {
 }
 """
 
-# ==========================================
-# VARIÁVEIS DE ESTADO E CONTROLE
-# ==========================================
+
+# Variáveis de estado e controle
+#Cada bloco abaixo guarda o estado atual (posição/rotação/escala) de um
+# objeto da cena. Esses valores são lidos a cada frame no loop principal
+# para montar a matriz de transformação do objeto, e são alterados pelos
+# callbacks de teclado em `key_event`.
+
 # Cruz 3D
 t_x, t_y, t_z = -0.86, 0.1, 0.0
 ang_x, ang_y, ang_z = -0.15, -0.5854, 0.15
@@ -192,12 +209,7 @@ char_scale = [0.12, 0.12]
 wireframe_mode = False
 
 # --- Cômoda 2D ---
-# Estado controlável pelo usuário: translação (tx, ty), rotação e escala uniforme.
-# A posição inicial (tx=0.0, ty=-0.12, rotation=0.0, scale=0.78) é a mesma
-# já usada na cena de referência — o usuário pode ajustar a rotação/escala/
-# posição a partir daí para encaixar melhor a cômoda na perspectiva do corredor.
-# A matriz final é composta a partir das transformações geométricas primárias
-# (translação, rotação e escala) via compose_transform_2d().
+# Estado controlável pelo usuário: translação (tx, ty), rotação e escala uniforme. 
 cabinet_state = {
     'tx': -0.10,
     'ty': -0.11,
@@ -206,8 +218,7 @@ cabinet_state = {
 }
 
 # --- Luminária 3D ---
-# Escala inicial equivalente a 15 cliques de diminuição na tecla 7
-# (1.0 - 15 * 0.02 = 0.70).
+
 lamp_state = {
     'scale': 0.70,
 }
@@ -219,7 +230,7 @@ skel_state = {
     'rotation': 0.0,
     'scale': 1.0,
 }
-
+# Estado da simulação de física da cabeça do esqueleto quando ela "cai".
 skel_head_state = {
     'falling': False,
     'x': 0.0,
@@ -231,11 +242,13 @@ skel_head_state = {
     'target_rotation': 0.0,
 }
 
-SKEL_GROUND_Y = -0.95
-SKEL_GRAVITY = -0.0016
-SKEL_LEFT_BOUND = -0.98
+SKEL_GROUND_Y = -0.95 # altura considerada chão para a cabeça do esqueleto (quando atinge o chão, ela para de cair)
+SKEL_GRAVITY = -0.0016 # aceleração vertical aplicada por frame
+SKEL_LEFT_BOUND = -0.98 #limite esquerdo até onde a cabeça pode rolar
 
-
+#Inicia a animação de queda da cabeça do esqueleto.
+#Calcula a posição mundial atual da cabeça (aplicando a transformação do corpo do esqueleto: translação, rotação e escala) e usa esse pontocomo posição inicial da cabeça "solta", que passa a ser simulada
+#independentemente do corpo em `update_skeleton_physics`.
 def trigger_skel_head_fall():
     if not skel_head_state['falling']:
         skel_head_state['falling'] = True
@@ -254,7 +267,7 @@ def trigger_skel_head_fall():
         skel_head_state['hit_ground'] = False
         skel_head_state['target_rotation'] = 0.0
 
-
+# Restaura o esqueleto (corpo e cabeça) para o estado/posição inicial.
 def reset_skeleton():
     skel_state['tx'] = 0.78
     skel_state['ty'] = -0.72
@@ -270,14 +283,22 @@ def reset_skeleton():
     skel_head_state['hit_ground'] = False
     skel_head_state['target_rotation'] = 0.0
 
-
+# Restaura a cômoda para sua posição, rotação e escala iniciais
 def reset_cabinet():
     cabinet_state['tx'] = 0.0
     cabinet_state['ty'] = -0.12
     cabinet_state['rotation'] = 0.0
     cabinet_state['scale'] = 0.78
 
-
+ #Comportamento, enquanto `skel_head_state['falling']` for True:
+     # 1. Aplica gravidade à velocidade vertical (até tocar o chão).
+     # 2. Integra a posição (x, y) pela velocidade atual.
+     # 3. Detecta colisão com o "chão" (SKEL_GROUND_Y): ao tocar, zera a velocidade vertical e define uma rotação alvo (3 voltas completas)
+     # para simular a cabeça rolando.
+     # 4. Enquanto a rotação atual for menor que a rotação alvo, 
+     #gira a cabeça e a desloca horizontalmente de forma proporcional ao raio(rolamento sem deslizar), 
+     #com velocidade angular decrescente conforme se aproxima do alvo .
+# 5. Impede que a cabeça ultrapasse o limite esquerdo da cena (SKEL_LEFT_BOUND), parando o movimento horizontal nesse ponto.
 def update_skeleton_physics():
     if not skel_head_state['falling']:
         return
@@ -317,7 +338,7 @@ def update_skeleton_physics():
         skel_head_state['vx'] = 0.0
         skel_head_state['target_rotation'] = skel_head_state['rotation']
 
-
+# Gera os vértices da Luminária 3D.
 def generate_lamp_geometry(segments=64):
     vertices = []
 
@@ -391,7 +412,20 @@ def add_circle(vertices, cx, cy, rx, ry, color, segments=16):
         for x, y in [p1, p2, p3]:
             vertices.extend([x, y, r, g, b])
 
-
+    # Monta, "à mão" (coordenadas fixas), toda a geometria 2D da cômoda com
+    # espelho, usando `add_quad` e `add_circle`.
+    # A cômoda é construída em partes, todas em coordenadas locais (antes de
+    # qualquer translação/rotação/escala global, que é aplicada depois via
+    # `cabinet_state` + `compose_transform_2d`):
+    # - Espelho: moldura externa, moldura interna e vidro (glass), com um
+    #   deslocamento vertical (`mirror_offset_y`) para ficar acima do corpo.
+    # - Corpo/estrutura: topo, lados (com painel "inset") e base com uma
+    #   pequena espessura para simular profundidade.
+    # - Frente com gavetas: a face frontal é dividida em 3 linhas x 2
+    #   colunas de gavetas. Para cada célula, é feito um contorno + um
+    #   painel interno ligeiramente menor (efeito de baixo-relevo) e 2
+    #   maçanetas, com interpolação bilinear das coordenadas Y ao longo
+    #   da largura (`interp_y`) para acompanhar a perspectiva/trapézio da frente do móvel.
 def build_cabinet_geometry():
     vertices = []
     c_outline = (0.06, 0.04, 0.02)
@@ -404,6 +438,7 @@ def build_cabinet_geometry():
     c_mirror_frame = (0.28, 0.17, 0.09)
     c_glass = (0.42, 0.54, 0.56)
     mirror_offset_y = 0.32
+
     add_quad(vertices, (-0.88, 0.62 + mirror_offset_y), (-0.42, 0.38 + mirror_offset_y), (-0.42, -0.05 + mirror_offset_y), (-0.88, 0.10 + mirror_offset_y), c_outline)
     add_quad(vertices, (-0.86, 0.59 + mirror_offset_y), (-0.44, 0.36 + mirror_offset_y), (-0.44, -0.03 + mirror_offset_y), (-0.86, 0.12 + mirror_offset_y), c_mirror_frame)
     add_quad(vertices, (-0.80, 0.52 + mirror_offset_y), (-0.48, 0.32 + mirror_offset_y), (-0.48, 0.05 + mirror_offset_y), (-0.80, 0.19 + mirror_offset_y), c_outline)
@@ -436,11 +471,19 @@ def build_cabinet_geometry():
     front_right_x = -0.11
     y_lines = [(0.13, -0.04), (-0.16, -0.16), (-0.47, -0.28), (-0.78, -0.41)]
 
+    # Interpolação linear da altura Y (topo/base de uma gaveta) entre a
+    # borda esquerda e a borda direita da frente da cômoda, dado um x
+    # intermediário — usado para desenhar a divisória central das
+    # gavetas seguindo o mesmo trapézio da frente do móvel.
     def interp_y(x, y_l, y_r):
         t = (x - front_left_x) / (front_right_x - front_left_x)
         return y_l + t * (y_r - y_l)
-
+        
     for i in range(3):
+        # Para cada uma das 3 linhas de gavetas, calcula os 4 cantos
+                # (topo-esquerda/direita, base-esquerda/direita) e desenha duas
+                # gavetas (esquerda e direita), cada uma com contorno, painel
+                # interno e 2 maçanetas.
         yt_l, yt_r = y_lines[i]
         yb_l, yb_r = y_lines[i + 1]
         yt_m = interp_y(col_split_x, yt_l, yt_r)
@@ -480,7 +523,7 @@ def build_cabinet_geometry():
 
     return np.array(vertices, dtype=np.float32)
 
-
+# Constrói a geometria da cômoda (`build_cabinet_geometry`) e a envia para a GPU em um VAO/VBO.
 def create_cabinet_mesh():
     vertices = build_cabinet_geometry()
     vao = glGenVertexArrays(1)
@@ -496,6 +539,8 @@ def create_cabinet_mesh():
     glBindVertexArray(0)
     return vao, vbo, len(vertices) // 5
 
+# Callback de teclado do GLFW: interpreta teclas pressionadas/seguradas
+# e atualiza o estado (posição/rotação/escala) dos objetos da cena.
 
 def key_event(window, key, scancode, action, mods):
     global t_x, t_y, ang_x, ang_y, ang_z, s_factor, wireframe_mode
@@ -577,9 +622,16 @@ def key_event(window, key, scancode, action, mods):
         if key == glfw.KEY_7: lamp_state['scale'] = max(0.05, lamp_state['scale'] - 0.02)
 
 
-# ==========================================
-# ÁLGEBRA DE MATRIZES 4X4 (NUMPY)
-# ==========================================
+# Álgebra de matrizes 4x4
+    #Monta uma matriz de transformação 4x4 (linha-maior, para uso com
+    #glUniformMatrix4fv(..., GL_TRUE, ...)) equivalente a:
+    #Translação(tx, ty) * Rotação(angle_deg) * Escala(sx, sy)
+    # aplicada a pontos 2D "embutidos" em 4D (z=0, w=1). É a função central
+    #usada para posicionar praticamente todos os objetos 2D da cena
+    #(membros do monstro/esqueleto, cômoda, ossos etc.).
+    #tx, ty: translação nos eixos X e Y.
+    # angle_deg: rotação em graus, sentido anti-horário.
+    # sx, sy: fatores de escala nos eixos X e Y. 
 def compose_transform_2d(tx=0.0, ty=0.0, angle_deg=0.0, sx=1.0, sy=1.0):
     rad = math.radians(angle_deg)
     cos_a, sin_a = math.cos(rad), math.sin(rad)
@@ -592,14 +644,16 @@ def compose_transform_2d(tx=0.0, ty=0.0, angle_deg=0.0, sx=1.0, sy=1.0):
     ], dtype=np.float32)
     return mat
 
-
+# Estrutura simples que agrupa os dados necessários para desenhar uma
+#malha: o VAO já configurado na GPU, a contagem de vértices e o modo
+# de desenho (GL_TRIANGLES, GL_TRIANGLE_FAN, GL_LINE_STRIP, etc.)
 class Mesh:
     def __init__(self, vao, count, draw_mode=GL_TRIANGLES):
         self.vao = vao
         self.count = count
         self.draw_mode = draw_mode
 
-
+# Função auxiliar interna
 def _upload_2d_mesh(vertices, draw_mode):
     vertices = np.array(vertices, dtype=np.float32)
     vao, vbo = glGenVertexArrays(1), glGenBuffers(1)
@@ -611,9 +665,9 @@ def _upload_2d_mesh(vertices, draw_mode):
     return vao, len(vertices) // 2
 
 
-# ==========================================
-# GERAÇÃO DE GEOMETRIAS
-# ==========================================
+#Gera os vértices (posição XY + cor RGB) do corredor de fundo: chão,
+#duas paredes laterais, teto e uma "porta" central mais escura ao
+#fundo, todos desenhados como triângulos em coordenadas NDC fixas
 def create_corridor_mesh():
     COLOR_CARPET  = [0.2, 0.2, 0.2]
     COLOR_WALL    = [0.18, 0.31, 0.31]
@@ -634,7 +688,8 @@ def create_corridor_mesh():
     ]
     return np.array(vertices, dtype=np.float32)
 
-
+#Gera os vértices (posição XYZ + cor RGBA) da cruz 3D a partir de uma
+# lista fixa de 64 pontos brutos (16 faces x 4 vértices cada, organizados como GL_TRIANGLE_STRIP por face).
 def create_cross_mesh(cores_faces):
     raw_verts = [
         (-0.1, -0.6, +0.1), (+0.1, -0.6, +0.1), (-0.1, +0.6, +0.1), (+0.1, +0.6, +0.1),
@@ -666,19 +721,21 @@ def create_cross_mesh(cores_faces):
             interleaved_data.extend([x, y, z, cor[0], cor[1], cor[2], cor[3]])
 
     return np.array(interleaved_data, dtype=np.float32)
-
+#Cria um quad 1x1 centrado na origem (dois triângulos), sem cor por vértice
 def create_quad():
     vertices = [-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]
     vao, count = _upload_2d_mesh(vertices, GL_TRIANGLES)
     return Mesh(vao, count, GL_TRIANGLES)
 
-
+#Cria um triângulo isósceles apontando para cima, centrado na origem
 def create_triangle():
     vertices = [0.0, 1.0, -0.5, 0.0, 0.5, 0.0]
     vao, count = _upload_2d_mesh(vertices, GL_TRIANGLES)
     return Mesh(vao, count, GL_TRIANGLES)
 
-
+# Cria a forma da pupila (um "losango" com bordas curvas, feito de dois
+    #arcos de cosseno opostos), desenhado como GL_TRIANGLE_FAN a partir do
+    #centro (0, 0).
 def create_pupil_shape(segments=40):
     vertices = [0.0, 0.0]
     for i in range(segments + 1):
@@ -690,7 +747,9 @@ def create_pupil_shape(segments=40):
     vao, count = _upload_2d_mesh(vertices, GL_TRIANGLE_FAN)
     return Mesh(vao, count, GL_TRIANGLE_FAN)
 
-
+# Cria a forma do olho (mesma ideia da pupila, mas rotacionada 90°:
+    #curvas de cosseno no eixo Y em vez de X), desenhado como
+    #GL_TRIANGLE_FAN a partir do centro (0, 0).
 def create_eye_shape(segments=40):
     vertices = [0.0, 0.0]
     for i in range(segments + 1):
@@ -702,7 +761,7 @@ def create_eye_shape(segments=40):
     vao, count = _upload_2d_mesh(vertices, GL_TRIANGLE_FAN)
     return Mesh(vao, count, GL_TRIANGLE_FAN)
 
-
+#"Cria um círculo preenchido de raio 0.5, como GL_TRIANGLE_FAN a partir do centro
 def create_circle(segments=48):
     vertices = [0.0, 0.0]
     for i in range(segments + 1):
@@ -711,7 +770,9 @@ def create_circle(segments=48):
     vao, count = _upload_2d_mesh(vertices, GL_TRIANGLE_FAN)
     return Mesh(vao, count, GL_TRIANGLE_FAN)
 
-
+#Cria um arco semicircular (meia elipse) como GL_LINE_STRIP, usado para
+    #desenhar as costelas do esqueleto (cada costela é este mesmo arco,
+    #reescalado/reposicionado
 def create_arc_mesh(segments=10):
     vertices = []
     for i in range(segments + 1):
@@ -722,7 +783,9 @@ def create_arc_mesh(segments=10):
     vao, count = _upload_2d_mesh(vertices, GL_LINE_STRIP)
     return Mesh(vao, count, GL_LINE_STRIP)
 
-
+#Cria a coluna vertebral do esqueleto como uma curva de Bézier
+    # quadrática (do topo da coluna até a pélvis, passando por um ponto de
+    #controle), desenhada como GL_LINE_STRIP
 def create_spine_mesh(segments=10):
     spine_top_x, spine_top_y = 0.02, 0.58
     control_x, control_y = 0.10, 0.30
@@ -738,9 +801,10 @@ def create_spine_mesh(segments=10):
     return Mesh(vao, count, GL_LINE_STRIP)
 
 
-# ==========================================
+
 # RENDERIZAÇÃO DE OBJETOS HIERÁRQUICOS
-# ==========================================
+#  Desenha uma única `Mesh` com uma matriz de modelo e cor específicas,
+# usando o shader "de personagem" (CHAR_VERTEX_SRC/CHAR_FRAGMENT_SRC)
 def draw_shape(mesh, model_matrix, color, model_loc, color_loc, noise_loc, apply_noise=True):
     glUniformMatrix4fv(model_loc, 1, GL_TRUE, model_matrix.flatten())
     glUniform4fv(color_loc, 1, color)
@@ -748,7 +812,7 @@ def draw_shape(mesh, model_matrix, color, model_loc, color_loc, noise_loc, apply
     glBindVertexArray(mesh.vao)
     glDrawArrays(mesh.draw_mode, 0, mesh.count)
 
-
+# Desenha um "membro" (osso) como um quad alongado e rotacionado, ligando dois pontos `start` e `end` no espaço local do pai
 def draw_limb(parent_matrix, start, end, thickness, quad_mesh, model_loc, color_loc, noise_loc, color, apply_noise=True):
     dx, dy = end[0] - start[0], end[1] - start[1]
     length = math.hypot(dx, dy)
@@ -757,12 +821,16 @@ def draw_limb(parent_matrix, start, end, thickness, quad_mesh, model_loc, color_
     local_m = compose_transform_2d(tx=mid[0], ty=mid[1], angle_deg=angle, sx=thickness, sy=length)
     draw_shape(quad_mesh, parent_matrix @ local_m, color, model_loc, color_loc, noise_loc, apply_noise=apply_noise)
 
-
+# Desenha uma "junta" (articulação) como um círculo de raio `radius`
+# centrado em `pos`, no espaço local do pai — usado para suavizar as
+# conexões entre membros (cotovelos, joelhos, tornozelos, pélvis etc.
 def draw_joint(parent_matrix, pos, radius, circle_mesh, model_loc, color_loc, noise_loc, color, apply_noise=True):
     local_m = compose_transform_2d(tx=pos[0], ty=pos[1], angle_deg=0.0, sx=radius * 2.0, sy=radius * 2.0)
     draw_shape(circle_mesh, parent_matrix @ local_m, color, model_loc, color_loc, noise_loc, apply_noise=apply_noise)
 
-
+#Desenha 4 "dedos" (triângulos alongados) irradiando a partir do
+#pulso (`wrist_pos`) do monstro, em ângulos e comprimentos fixos, para
+#simular uma mão apoiada no chão.
 def draw_ground_fingers(parent_matrix, wrist_pos, dir_x, triangle_mesh, model_loc, color_loc, noise_loc, body_color):
     angles = [-35.0, -18.0, 0.0, 20.0] if dir_x < 0 else [35.0, 18.0, 0.0, -20.0]
     lengths = [0.22, 0.28, 0.32, 0.25]
@@ -771,7 +839,16 @@ def draw_ground_fingers(parent_matrix, wrist_pos, dir_x, triangle_mesh, model_lo
         local_m = compose_transform_2d(tx=wrist_pos[0], ty=wrist_pos[1], angle_deg=(180.0 + ang), sx=width, sy=length)
         draw_shape(triangle_mesh, parent_matrix @ local_m, body_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
+#Desenha 4 "dedos" (triângulos alongados) irradiando a partir do
+#pulso (`wrist_pos`) do monstro, em ângulos e comprimentos fixos, para
+#simular uma mão apoiada no chão.
 
+#Ordem de desenho (todas coordenadas em espaço local do personagem):
+    #1. Tronco e bacia (membros + preenchimentos de peito/pélvis).
+    #2. Pescoço.
+    #3. Braços longos (ombro -> cotovelo -> pulso, com juntas arredondadas e "dedos" no chão em cada pulso).
+    #4. Pernas (quadril -> joelho -> tornozelo -> pé).
+    #5. Cabeça: espinhos ao redor (8 triângulos em ângulos fixos),base da cabeça (círculo), olho (forma de "amêndoa") e pupila.
 def draw_character(parent_matrix, quad_mesh, triangle_mesh, eye_mesh, circle_mesh, pupil_mesh, model_loc, color_loc, noise_loc):
     if wireframe_mode:
         body_color = np.array([0.0, 1.0, 0.8, 1.0], dtype=np.float32)   # Ciano vibrante
@@ -842,7 +919,10 @@ def draw_character(parent_matrix, quad_mesh, triangle_mesh, eye_mesh, circle_mes
     pupil_m = compose_transform_2d(tx=head_center[0], ty=head_center[1], angle_deg=0.0, sx=0.14, sy=0.12)
     draw_shape(pupil_mesh, parent_matrix @ pupil_m, pupil_color, model_loc, color_loc, noise_loc, apply_noise=True)
 
-
+#Desenha o corpo do esqueleto (tudo exceto a cabeça, que é tratada
+    #separadamente para poder "cair" de forma independente): coluna,
+   # costelas, pélvis, um braço (ombro->cotovelo->pulso->mão) e uma perna
+   # (quadril->joelho->tornozelo->pé)
 def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_mesh, model_loc, color_loc, noise_loc):
     bone_color = np.array([0.2, 1.0, 0.2, 1.0], dtype=np.float32) if wireframe_mode else np.array([0.88, 0.85, 0.78, 1.0], dtype=np.float32)
 
@@ -881,7 +961,7 @@ def draw_skeleton_body(parent_matrix, quad_mesh, circle_mesh, arc_mesh, spine_me
     foot_end = [ankle[0] - 0.12, ankle[1] - 0.02]
     draw_limb(parent_matrix, ankle, foot_end, 0.010, quad_mesh, model_loc, color_loc, noise_loc, bone_color, apply_noise=False)
 
-
+# Desenha a caveira do esqueleto: crânio (círculo grande), mandíbula (círculo menor, deslocado para baixo) e uma "órbita ocular"
 def draw_skeleton_head(parent_matrix, circle_mesh, model_loc, color_loc, noise_loc):
     if wireframe_mode:
         bone_color   = np.array([0.2, 1.0, 0.2, 1.0], dtype=np.float32)
@@ -899,7 +979,11 @@ def draw_skeleton_head(parent_matrix, circle_mesh, model_loc, color_loc, noise_l
     socket_m = compose_transform_2d(tx=-0.025, ty=0.01, angle_deg=0.0, sx=0.03, sy=0.05)
     draw_shape(circle_mesh, parent_matrix @ socket_m, socket_color, model_loc, color_loc, noise_loc, apply_noise=False)
 
-
+#Monta a matriz global do corpo a partir de `skel_state` e desenha o
+   #corpo com `draw_skeleton_body`. Para a cabeça, há dois casos:
+   #- Se `skel_head_state['falling']` for True: a cabeça é desenhada
+    # em sua posição/rotação mundial simulada por `update_skeleton_physics` (independente do corpo).
+   #- Caso contrário: a cabeça é desenhada "presa" ao corpo, usando uma transformação local fixa (0, 0.65) composta com a matrizdo corpo.
 def draw_skeleton(quad_mesh, circle_mesh, arc_mesh, spine_mesh, model_loc, color_loc, noise_loc):
     body_matrix = compose_transform_2d(
         tx=skel_state['tx'], ty=skel_state['ty'],
@@ -920,10 +1004,12 @@ def draw_skeleton(quad_mesh, circle_mesh, arc_mesh, spine_mesh, model_loc, color
 
     draw_skeleton_head(head_matrix, circle_mesh, model_loc, color_loc, noise_loc)
 
-
+# Proporção fixa (largura/altura) da cena "de referência" (500x900),
+# usada para calcular um viewport com letterbox/pillarbox e manter essa
+# proporção independentemente do tamanho real da janela.
 SCENE_ASPECT = 500.0 / 900.0
 
-
+# Calcula e aplica um viewport centralizado que preserva a proporção SCENE_ASPECT, adicionando barras pretas (letterbox/pillarbox) se necessário.
 def apply_letterboxed_viewport(width, height):
     if width <= 0 or height <= 0:
         return
@@ -944,10 +1030,7 @@ def apply_letterboxed_viewport(width, height):
 def framebuffer_size_callback(window, width, height):
     apply_letterboxed_viewport(width, height)
 
-
-# ==========================================
-# MAIN LOOP
-# ==========================================
+# Main Loop
 def main():
     if not glfw.init():
         sys.exit()
@@ -974,7 +1057,7 @@ def main():
     fb_width, fb_height = glfw.get_framebuffer_size(window)
     apply_letterboxed_viewport(fb_width, fb_height)
 
-    # 1. COMPILAÇÃO DOS SHADERS
+    # 1. Compilação dos shaders 
     corridor_shader = compileProgram(
         compileShader(CORRIDOR_VERTEX_SRC, GL_VERTEX_SHADER),
         compileShader(CORRIDOR_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
@@ -1000,7 +1083,7 @@ def main():
         compileShader(CHAR_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
     )
 
-    # 2. MALHA E VAO DO CORREDOR
+    # 2. Malha e vao do corredor 2D
     corridor_verts = create_corridor_mesh()
     corridor_VAO, corridor_VBO = glGenVertexArrays(1), glGenBuffers(1)
     glBindVertexArray(corridor_VAO)
@@ -1012,7 +1095,7 @@ def main():
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride_corr, ctypes.c_void_p(2 * corridor_verts.itemsize))
     glEnableVertexAttribArray(1)
 
-    # 3. REAPROVEITA A CRUZ DEFINIDA EM cross.py
+    # 3. Reaproveita a cruz definida em cross.py
     from cross import create_cross_mesh as build_cross_mesh, MATRIZCORES_FACES as CROSS_COLORS
     cross_verts = build_cross_mesh(CROSS_COLORS)
     cross_VAO, cross_VBO = glGenVertexArrays(1), glGenBuffers(1)
@@ -1080,17 +1163,14 @@ def main():
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
             glLineWidth(1.0)
 
-        # -------------------------------------------------------------
+        
         # 1. RENDERIZA CORREDOR 2D
-        # -------------------------------------------------------------
         glDisable(GL_DEPTH_TEST)
         glUseProgram(corridor_shader)
         glBindVertexArray(corridor_VAO)
         glDrawArrays(GL_TRIANGLES, 0, len(corridor_verts) // 5)
 
-        # -------------------------------------------------------------
         # 2. RENDERIZA CÔMODA 2D
-        # -------------------------------------------------------------
         glDisable(GL_DEPTH_TEST)
         glUseProgram(cabinet_shader)
 
@@ -1106,9 +1186,8 @@ def main():
         glBindVertexArray(cabinet_vao)
         glDrawArrays(GL_TRIANGLES, 0, cabinet_count)
 
-        # -------------------------------------------------------------
+        
         # 3. RENDERIZA CRUZ 3D
-        # -------------------------------------------------------------
         glEnable(GL_DEPTH_TEST)
         glUseProgram(cross_shader)
 
@@ -1118,7 +1197,7 @@ def main():
             [0.0, 0.0, s_factor, 0.0],
             [0.0, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
-
+         # Rotação em torno do eixo X
         cos_x, sin_x = math.cos(ang_x), math.sin(ang_x)
         mat_rx = np.array([
             [1.0, 0.0, 0.0, 0.0],
@@ -1126,7 +1205,7 @@ def main():
             [0.0, sin_x, cos_x, 0.0],
             [0.0, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
-
+        # Rotação em torno do eixo Y
         cos_y, sin_y = math.cos(ang_y), math.sin(ang_y)
         mat_ry = np.array([
             [cos_y, 0.0, sin_y, 0.0],
@@ -1134,7 +1213,7 @@ def main():
             [-sin_y, 0.0, cos_y, 0.0],
             [0.0, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
-
+        # Rotação em torno do eixo Z 
         cos_z, sin_z = math.cos(ang_z), math.sin(ang_z)
         mat_rz = np.array([
             [cos_z, -sin_z, 0.0, 0.0],
@@ -1149,7 +1228,8 @@ def main():
             [0.0, 0.0, 1.0, t_z],
             [0.0, 0.0, 0.0, 1.0]
         ], dtype=np.float32)
-
+        # Composição final: T * (Rz * Ry * Rx) * S — rotações combinadas
+        # (ordem Z, depois Y, depois X) antes de escalar e transladar.
         mat_composta_cross = mat_translacao @ (mat_rz @ mat_ry @ mat_rx) @ mat_escala
         glUniformMatrix4fv(loc_cross_trans, 1, GL_TRUE, mat_composta_cross.flatten())
 
@@ -1157,9 +1237,8 @@ def main():
         for face_idx in range(16):
             glDrawArrays(GL_TRIANGLE_STRIP, face_idx * 4, 4)
 
-        # -------------------------------------------------------------
+        
         # 3. RENDERIZA LUMINÁRIA 3D
-        # -------------------------------------------------------------
         glUseProgram(lamp_shader)
         lamp_S = np.array([
             [0.25 * lamp_state['scale'], 0.0, 0.0, 0.0],
@@ -1189,9 +1268,8 @@ def main():
         glDrawArrays(GL_TRIANGLE_STRIP, lamp_rim_start, (lamp_segments + 1) * 2)
         glDrawArrays(GL_TRIANGLE_FAN, 0, lamp_segments + 2)
 
-        # -------------------------------------------------------------
+       
         # 4. RENDERIZA MONSTRO 2D E ESQUELETO 2D (HIERÁRQUICOS)
-        # -------------------------------------------------------------
         glDisable(GL_DEPTH_TEST)
         glUseProgram(char_shader)
 
@@ -1213,6 +1291,7 @@ def main():
 
         glfw.swap_buffers(window)
 
+    # Liberação de recursos da GPU ao encerrar o programa.
     glDeleteVertexArrays(1, [corridor_VAO])
     glDeleteVertexArrays(1, [cross_VAO])
     glDeleteVertexArrays(1, [lamp_vao])
