@@ -115,6 +115,32 @@ void main() {
 """
 
 # ==========================================
+# SHADERS DA CÔMODA 2D
+# ==========================================
+CABINET_VERTEX_SRC = """
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec3 aColor;
+uniform mat4 uTransform;
+out vec3 vColor;
+
+void main() {
+    gl_Position = uTransform * vec4(aPos, 0.0, 1.0);
+    vColor = aColor;
+}
+"""
+
+CABINET_FRAGMENT_SRC = """
+#version 330 core
+in vec3 vColor;
+out vec4 FragColor;
+
+void main() {
+    FragColor = vec4(vColor, 1.0);
+}
+"""
+
+# ==========================================
 # SHADERS DE OBJETOS 2D HIERÁRQUICOS (MONSTRO E ESQUELETO)
 # ==========================================
 CHAR_VERTEX_SRC = """
@@ -164,6 +190,20 @@ char_rotation = 0.0
 char_scale = [0.12, 0.12]
 
 wireframe_mode = False
+
+# --- Cômoda 2D ---
+# Estado controlável pelo usuário: translação (tx, ty), rotação e escala uniforme.
+# A posição inicial (tx=0.0, ty=-0.12, rotation=0.0, scale=0.78) é a mesma
+# já usada na cena de referência — o usuário pode ajustar a rotação/escala/
+# posição a partir daí para encaixar melhor a cômoda na perspectiva do corredor.
+# A matriz final é composta a partir das transformações geométricas primárias
+# (translação, rotação e escala) via compose_transform_2d().
+cabinet_state = {
+    'tx': -0.10,
+    'ty': -0.11,
+    'rotation': 0.0,
+    'scale': 0.48,
+}
 
 # --- Esqueleto 2D ---
 skel_state = {
@@ -222,6 +262,13 @@ def reset_skeleton():
     skel_head_state['rotation'] = 0.0
     skel_head_state['hit_ground'] = False
     skel_head_state['target_rotation'] = 0.0
+
+
+def reset_cabinet():
+    cabinet_state['tx'] = -0.10
+    cabinet_state['ty'] = 0.0
+    cabinet_state['rotation'] = 0.0
+    cabinet_state['scale'] = 0.54
 
 
 def update_skeleton_physics():
@@ -316,6 +363,132 @@ def create_lamp_mesh():
     return vao, vbo, segments, rim_start, back_start
 
 
+def add_quad(vertices, p1, p2, p3, p4, color):
+    r, g, b = color
+    pts = [p1, p2, p3, p1, p3, p4]
+    for x, y in pts:
+        vertices.extend([x, y, r, g, b])
+
+
+def add_circle(vertices, cx, cy, rx, ry, color, segments=16):
+    r, g, b = color
+    angles = np.linspace(0, 2 * math.pi, segments, endpoint=False)
+    for i in range(segments):
+        a1 = angles[i]
+        a2 = angles[(i + 1) % segments]
+        p1 = (cx, cy)
+        p2 = (cx + rx * math.cos(a1), cy + ry * math.sin(a1))
+        p3 = (cx + rx * math.cos(a2), cy + ry * math.sin(a2))
+        for x, y in [p1, p2, p3]:
+            vertices.extend([x, y, r, g, b])
+
+
+def build_cabinet_geometry():
+    vertices = []
+    c_outline = (0.10, 0.10, 0.10)
+    c_top = (0.94, 0.92, 0.88)
+    c_side = (0.78, 0.74, 0.67)
+    c_side_inset = (0.68, 0.64, 0.58)
+    c_front = (0.83, 0.80, 0.73)
+    c_drawer = (0.89, 0.86, 0.80)
+    c_knob = (0.96, 0.82, 0.15)
+    c_mirror_frame = (0.80, 0.75, 0.64)
+    c_glass = (0.42, 0.54, 0.56)
+
+    mirror_offset_y = 0.32
+    add_quad(vertices, (-0.88, 0.62 + mirror_offset_y), (-0.42, 0.38 + mirror_offset_y), (-0.42, -0.05 + mirror_offset_y), (-0.88, 0.10 + mirror_offset_y), c_outline)
+    add_quad(vertices, (-0.86, 0.59 + mirror_offset_y), (-0.44, 0.36 + mirror_offset_y), (-0.44, -0.03 + mirror_offset_y), (-0.86, 0.12 + mirror_offset_y), c_mirror_frame)
+    add_quad(vertices, (-0.80, 0.52 + mirror_offset_y), (-0.48, 0.32 + mirror_offset_y), (-0.48, 0.05 + mirror_offset_y), (-0.80, 0.19 + mirror_offset_y), c_outline)
+    add_quad(vertices, (-0.79, 0.50 + mirror_offset_y), (-0.49, 0.31 + mirror_offset_y), (-0.49, 0.07 + mirror_offset_y), (-0.79, 0.20 + mirror_offset_y), c_glass)
+
+    s_bl = (-0.93, -0.85)
+    s_br = (-0.44, -0.88)
+    s_tr = (-0.44, 0.16)
+    s_tl = (-0.93, 0.19)
+    t_back_right = (-0.10, -0.01)
+    add_quad(vertices, s_tl, s_tr, t_back_right, (-0.60, 0.02), c_outline)
+    add_quad(vertices, s_tl, (-0.44, 0.15), (-0.11, -0.02), (-0.59, 0.03), c_top)
+    add_quad(vertices, s_tl, s_tr, s_br, s_bl, c_outline)
+    add_quad(vertices, (-0.92, 0.18), (-0.45, 0.15), (-0.45, -0.87), (-0.92, -0.84), c_side)
+    add_quad(vertices, (-0.86, 0.11), (-0.52, 0.09), (-0.52, -0.74), (-0.86, -0.72), c_outline)
+    add_quad(vertices, (-0.85, 0.10), (-0.53, 0.08), (-0.53, -0.73), (-0.85, -0.71), c_side_inset)
+
+    c_thick = 0.012
+    add_quad(vertices, (-0.93, -0.85), (-0.44, -0.88), (-0.44, -0.88 - c_thick), (-0.93, -0.85 - c_thick), c_outline)
+
+    f_tl = (-0.44, 0.16)
+    f_tr = (-0.10, -0.01)
+    f_br = (-0.10, -0.46)
+    f_bl = (-0.44, -0.88)
+    add_quad(vertices, f_tl, f_tr, f_br, f_bl, c_outline)
+    add_quad(vertices, (-0.43, 0.15), (-0.11, -0.02), (-0.11, -0.45), (-0.43, -0.87), c_front)
+
+    col_split_x = -0.26
+    front_left_x = -0.43
+    front_right_x = -0.11
+    y_lines = [(0.13, -0.04), (-0.16, -0.16), (-0.47, -0.28), (-0.78, -0.41)]
+
+    def interp_y(x, y_l, y_r):
+        t = (x - front_left_x) / (front_right_x - front_left_x)
+        return y_l + t * (y_r - y_l)
+
+    for i in range(3):
+        yt_l, yt_r = y_lines[i]
+        yb_l, yb_r = y_lines[i + 1]
+        yt_m = interp_y(col_split_x, yt_l, yt_r)
+        yb_m = interp_y(col_split_x, yb_l, yb_r)
+
+        gx1_l, gx1_r = front_left_x + 0.01, col_split_x - 0.008
+        gy1_tl = yt_l - 0.015
+        gy1_tr = yt_m - 0.015
+        gy1_br = yb_m + 0.015
+        gy1_bl = yb_l + 0.015
+        add_quad(vertices, (gx1_l, gy1_tl), (gx1_r, gy1_tr), (gx1_r, gy1_br), (gx1_l, gy1_bl), c_outline)
+        add_quad(vertices, (gx1_l + 0.005, gy1_tl - 0.005), (gx1_r - 0.005, gy1_tr - 0.005), (gx1_r - 0.005, gy1_br + 0.005), (gx1_l + 0.005, gy1_bl + 0.005), c_drawer)
+        for u in [0.28, 0.72]:
+            kx = gx1_l + u * (gx1_r - gx1_l)
+            ky_top = gy1_tl + u * (gy1_tr - gy1_tl)
+            ky_bot = gy1_bl + u * (gy1_br - gy1_bl)
+            ky = (ky_top + ky_bot) * 0.5
+            rx = 0.010 - 0.004 * (kx - front_left_x) / (front_right_x - front_left_x)
+            ry = 0.015 - 0.005 * (kx - front_left_x) / (front_right_x - front_left_x)
+            add_circle(vertices, kx, ky, rx, ry, c_knob)
+
+        gx2_l, gx2_r = col_split_x + 0.008, front_right_x - 0.01
+        gy2_tl = yt_m - 0.015
+        gy2_tr = yt_r - 0.015
+        gy2_br = yb_r + 0.015
+        gy2_bl = yb_m + 0.015
+        add_quad(vertices, (gx2_l, gy2_tl), (gx2_r, gy2_tr), (gx2_r, gy2_br), (gx2_l, gy2_bl), c_outline)
+        add_quad(vertices, (gx2_l + 0.005, gy2_tl - 0.005), (gx2_r - 0.005, gy2_tr - 0.005), (gx2_r - 0.005, gy2_br + 0.005), (gx2_l + 0.005, gy2_bl + 0.005), c_drawer)
+        for u in [0.28, 0.72]:
+            kx = gx2_l + u * (gx2_r - gx2_l)
+            ky_top = gy2_tl + u * (gy2_tr - gy2_tl)
+            ky_bot = gy2_bl + u * (gy2_br - gy2_bl)
+            ky = (ky_top + ky_bot) * 0.5
+            rx = 0.010 - 0.004 * (kx - front_left_x) / (front_right_x - front_left_x)
+            ry = 0.015 - 0.005 * (kx - front_left_x) / (front_right_x - front_left_x)
+            add_circle(vertices, kx, ky, rx, ry, c_knob)
+
+    return np.array(vertices, dtype=np.float32)
+
+
+def create_cabinet_mesh():
+    vertices = build_cabinet_geometry()
+    vao = glGenVertexArrays(1)
+    vbo = glGenBuffers(1)
+    glBindVertexArray(vao)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+    stride = 5 * vertices.itemsize
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(2 * vertices.itemsize))
+    glEnableVertexAttribArray(1)
+    glBindVertexArray(0)
+    return vao, vbo, len(vertices) // 5
+
+
 def key_event(window, key, scancode, action, mods):
     global t_x, t_y, ang_x, ang_y, ang_z, s_factor, wireframe_mode
     global char_pos, char_rotation, char_scale
@@ -327,6 +500,8 @@ def key_event(window, key, scancode, action, mods):
             trigger_skel_head_fall()
         if key == glfw.KEY_0:
             reset_skeleton()
+        if key == glfw.KEY_9:
+            reset_cabinet()
         if key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
 
@@ -374,6 +549,20 @@ def key_event(window, key, scancode, action, mods):
 
         if key == glfw.KEY_PERIOD: skel_state['scale'] = min(2.0, skel_state['scale'] + 0.01)
         if key == glfw.KEY_COMMA:  skel_state['scale'] = max(0.05, skel_state['scale'] - 0.01)
+
+        # --- Controles da Cômoda 2D (translação e escala) ---
+        if key == glfw.KEY_D: cabinet_state['tx'] += 0.01
+        if key == glfw.KEY_B: cabinet_state['tx'] -= 0.01
+        if key == glfw.KEY_EQUAL: cabinet_state['ty'] += 0.01
+        if key == glfw.KEY_MINUS: cabinet_state['ty'] -= 0.01
+
+        if key == glfw.KEY_RIGHT_BRACKET:
+            cabinet_state['scale'] = min(3.0, cabinet_state['scale'] + 0.01)
+        if key == glfw.KEY_LEFT_BRACKET:
+            cabinet_state['scale'] = max(0.05, cabinet_state['scale'] - 0.01)
+
+        if key == glfw.KEY_APOSTROPHE: cabinet_state['rotation'] += 1.0
+        if key == glfw.KEY_SEMICOLON:  cabinet_state['rotation'] -= 1.0
 
 
 # ==========================================
@@ -789,6 +978,11 @@ def main():
         compileShader(LAMP_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
     )
 
+    cabinet_shader = compileProgram(
+        compileShader(CABINET_VERTEX_SRC, GL_VERTEX_SHADER),
+        compileShader(CABINET_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
+    )
+
     char_shader = compileProgram(
         compileShader(CHAR_VERTEX_SRC, GL_VERTEX_SHADER),
         compileShader(CHAR_FRAGMENT_SRC, GL_FRAGMENT_SHADER)
@@ -827,7 +1021,11 @@ def main():
     lamp_vao, lamp_vbo, lamp_segments, lamp_rim_start, lamp_back_start = create_lamp_mesh()
     lamp_transform_loc = glGetUniformLocation(lamp_shader, "uTransform")
 
-    # 6. DEMAIS MALHAS COMPARTILHADAS E UNIFORMS
+    # 6. CÔMODA 2D
+    cabinet_vao, cabinet_vbo, cabinet_count = create_cabinet_mesh()
+    cabinet_transform_loc = glGetUniformLocation(cabinet_shader, "uTransform")
+
+    # 7. DEMAIS MALHAS COMPARTILHADAS E UNIFORMS
     quad_mesh     = create_quad()
     triangle_mesh = create_triangle()
     eye_mesh      = create_eye_shape(40)
@@ -848,6 +1046,7 @@ def main():
     print("Monstro:       I/K/J/L move | U/O gira | N/M escala")
     print("Esqueleto:     T/G/F/H move | Y/V gira | ,/. escala")
     print("Esqueleto:     C derruba a cabeça | 0 reseta o esqueleto")
+    print("Cômoda:        D/B move X | =/- move Y | ]/[ escala | '/; gira | 9 reseta a cômoda")
     print("Wireframe (malhas visíveis e coloridas): P")
     print("Sair: ESC")
     print("-----------------\n")
@@ -877,7 +1076,25 @@ def main():
         glDrawArrays(GL_TRIANGLES, 0, len(corridor_verts) // 5)
 
         # -------------------------------------------------------------
-        # 2. RENDERIZA CRUZ 3D
+        # 2. RENDERIZA CÔMODA 2D
+        # -------------------------------------------------------------
+        glDisable(GL_DEPTH_TEST)
+        glUseProgram(cabinet_shader)
+
+        # Matriz composta a partir das transformações geométricas primárias
+        # (translação, rotação e escala), controláveis pelo usuário via cabinet_state.
+        cabinet_matrix = compose_transform_2d(
+            tx=cabinet_state['tx'], ty=cabinet_state['ty'],
+            angle_deg=cabinet_state['rotation'],
+            sx=cabinet_state['scale'], sy=cabinet_state['scale']
+        )
+        glUniformMatrix4fv(cabinet_transform_loc, 1, GL_TRUE, cabinet_matrix.flatten())
+
+        glBindVertexArray(cabinet_vao)
+        glDrawArrays(GL_TRIANGLES, 0, cabinet_count)
+
+        # -------------------------------------------------------------
+        # 3. RENDERIZA CRUZ 3D
         # -------------------------------------------------------------
         glEnable(GL_DEPTH_TEST)
         glUseProgram(cross_shader)
@@ -986,12 +1203,15 @@ def main():
     glDeleteVertexArrays(1, [corridor_VAO])
     glDeleteVertexArrays(1, [cross_VAO])
     glDeleteVertexArrays(1, [lamp_vao])
+    glDeleteVertexArrays(1, [cabinet_vao])
     glDeleteBuffers(1, [corridor_VBO])
     glDeleteBuffers(1, [cross_VBO])
     glDeleteBuffers(1, [lamp_vbo])
+    glDeleteBuffers(1, [cabinet_vbo])
     glDeleteProgram(corridor_shader)
     glDeleteProgram(cross_shader)
     glDeleteProgram(lamp_shader)
+    glDeleteProgram(cabinet_shader)
     glDeleteProgram(char_shader)
     glfw.terminate()
 
